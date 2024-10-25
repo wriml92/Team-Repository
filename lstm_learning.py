@@ -46,12 +46,12 @@ def preprocess_text(text):
     return text if len(text) > 0 else None  # 빈 문자열은 None으로 처리
 
 # 데이터 로드
-df = pd.read_csv("./netflix_reviews.csv")
+df = pd.read_csv("./data/netflix_reviews.csv")
 
 df["content"] = df["content"].apply(preprocess_text)
 # None 및 빈 문자열 제거
 df = df[df['content'].notna() & (df['content'].str.len() > 0)]
-df = df.iloc[:len(df) // 2]
+# df = df.iloc[:len(df) // 2]
 reviews = df['content']  # 리뷰 텍스트
 ratings = df['score']  # 리뷰 점수
 
@@ -94,27 +94,27 @@ class LSTMModel(nn.Module):
     def __init__(self, vocab_size, embed_dim, hidden_dim, output_dim):
         super(LSTMModel, self).__init__()
         self.embedding = nn.EmbeddingBag(vocab_size, embed_dim, sparse=True)
+        # self.embedding = nn.Embedding(vocab_size, embed_dim, padding_idx=0)  # Padding 설정
         self.lstm = nn.LSTM(embed_dim, hidden_dim, batch_first=True)
         self.fc = nn.Linear(hidden_dim, output_dim)
 
     def forward(self, text):
-        embedded = self.embedding(text)
-        output, (hidden, cell) = self.lstm(embedded.unsqueeze(1))  # (batch, seq, feature)
+        embedded = self.embedding(text).unsqueeze(1)
+        output, (hidden, cell) = self.lstm(embedded)  # (batch, seq, feature)
         return self.fc(hidden[-1])  # 마지막 hidden 상태 반환
-
 
 # 하이퍼파라미터 정의
 VOCAB_SIZE = len(vocab)
 EMBED_DIM = 64
-HIDDEN_DIM = 128
+HIDDEN_DIM = 258
 OUTPUT_DIM = len(set(ratings))  # 예측할 점수 개수
-
+EPOCHS = 5
 # LSTM 모델 초기화
 lstm_model = LSTMModel(VOCAB_SIZE, EMBED_DIM, HIDDEN_DIM, OUTPUT_DIM)
 
 # 손실 함수와 옵티마이저 정의
 criterion = nn.CrossEntropyLoss()
-optimizer = optim.SGD(lstm_model.parameters(), lr=0.01)
+optimizer = optim.SGD(lstm_model.parameters(), lr=0.1)
 
 # LSTM 모델 학습
 def train_lstm_model(model, train_loader, criterion, optimizer, epochs=5):
@@ -131,7 +131,7 @@ def train_lstm_model(model, train_loader, criterion, optimizer, epochs=5):
         print(f'Epoch {epoch+1}/{epochs}, Loss: {epoch_loss/len(train_loader)}')
 
 # LSTM 모델 학습 실행
-train_lstm_model(lstm_model, train_dataloader, criterion, optimizer, 5)
+train_lstm_model(lstm_model, train_dataloader, criterion, optimizer, EPOCHS)
 
 # LSTM 모델로부터 특징 추출
 def extract_features(model, data_loader):
@@ -148,7 +148,8 @@ X_train_features = extract_features(lstm_model, train_dataloader).numpy()
 y_train = train_ratings.tolist()  # 원래 점수로 변환
 
 # 로지스틱 회귀 모델 생성 및 학습
-logistic_model = LogisticRegression(solver='saga', multi_class='ovr', C=0.1, max_iter=2000, class_weight='balanced')
+logistic_model = LogisticRegression(solver='saga', multi_class='auto', max_iter=2000, class_weight='balanced')
+# logistic_model = LogisticRegression(solver='saga', multi_class='ovr', C=0.1, max_iter=2000, class_weight='balanced')
 scaler = StandardScaler()
 X_train_features_scaled = scaler.fit_transform(X_train_features)
 logistic_model.fit(X_train_features, y_train) 
@@ -172,14 +173,16 @@ def predict_review(logistic_model, model, review):
         tensor_review = text_pipeline(review).clone().detach().unsqueeze(0)
         features = model(tensor_review).numpy()
         prediction = logistic_model.predict(features)
+        prediction = np.clip(prediction, 0, 4)
+        
         return label_encoder.inverse_transform(prediction)[0]
 
 # 새로운 리뷰에 대한 예측
-predicted_score = predict_review(logistic_model, lstm_model, "this app is great but has some bugs")
+predicted_score = predict_review(logistic_model, lstm_model, "this app is great")
 print(f'Predicted Score: {predicted_score}')
-predicted_score = predict_review(logistic_model, lstm_model, "Its the amazing app")
+predicted_score = predict_review(logistic_model, lstm_model, "Nice bro")
 print(f'Predicted Score: {predicted_score}')
-predicted_score = predict_review(logistic_model, lstm_model, "I DONT LIKE THIS APP")
+predicted_score = predict_review(logistic_model, lstm_model, "World class experience")
 print(f'Predicted Score: {predicted_score}')
-predicted_score = predict_review(logistic_model, lstm_model, "Very poor app")
+predicted_score = predict_review(logistic_model, lstm_model, "poor app")
 print(f'Predicted Score: {predicted_score}')
